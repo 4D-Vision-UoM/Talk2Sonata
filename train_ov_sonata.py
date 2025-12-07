@@ -19,10 +19,10 @@ CONFIG = {
     'train_data_root': 'outputs/scannet_cache_train', # Updated to match your cache path
     'val_data_root': 'outputs/scannet_cache_val',     # Updated to match your cache path
     'output_dir': 'outputs/ov_sonata',
-    'batch_size': 8, 
+    'batch_size': 32, 
     'lr': 1e-3,  # Increased for training projectors from scratch
     'weight_decay': 1e-4,
-    'epochs': 50,
+    'epochs': 100,
     'patience': 10,
     'num_workers': 4,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
@@ -243,7 +243,7 @@ class Trainer:
         self.scheduler = None
         self.criterion = SigmoidFocalLoss()
         self.writer = SummaryWriter(log_dir=os.path.join(config['output_dir'], 'logs'))
-        self.best_val_loss = float('inf')
+        self.best_val_miou = 0.0
         self.patience_counter = 0
 
     def init_model(self, sample_dims):
@@ -260,7 +260,7 @@ class Trainer:
         loader = self.train_loader if is_train else self.val_loader
         epoch_loss = 0
         num_batches = 0
-        best_vis_loss = float('inf')
+        best_vis_miou = 0.0
         best_vis_payload = None
         
         # Metric Trackers
@@ -346,20 +346,23 @@ class Trainer:
                         vis_targets = binary_target
                         vis_coords = sample['stage_coords'][0] # Keep on CPU for vis save
                         
-                        # --- Compute Intersection & Union for Metrics (Stage 0 Only) ---
-                        with torch.no_grad():
-                            preds = (torch.sigmoid(logits) > 0.5).float()
-                            intersection = (preds * binary_target).sum().item()
-                            union = torch.max(preds, binary_target).sum().item()
-                            total_intersection += intersection
-                            total_union += union
+                    # --- Compute Intersection & Union for Metrics (Stage 0 Only) ---
+                    with torch.no_grad():
+                        preds = (torch.sigmoid(logits) > 0.5).float()
+                        intersection = (preds * binary_target).sum().item()
+                        union = torch.max(preds, binary_target).sum().item()
+                        total_intersection += intersection
+                        total_union += union
+                        
+                        # Compute scene-level mIoU for visualization tracking
+                        scene_miou = intersection / (union + 1e-6)
 
                 batch_loss += scene_loss
                 valid_samples += 1
                 
-                # Vis Tracking
-                if not is_train and scene_loss.item() < best_vis_loss:
-                    best_vis_loss = scene_loss.item()
+                # Vis Tracking - save scene with best mIoU
+                if not is_train and scene_miou > best_vis_miou:
+                    best_vis_miou = scene_miou
                     # Safely access name from meta_data
                     s_name = sample['meta_data']['name'] if 'meta_data' in sample else sample.get('name', 'unknown')
                     best_vis_payload = (s_name, target_text, vis_coords, vis_logits, vis_targets)
@@ -386,27 +389,27 @@ class Trainer:
         self.logger.info(f"{tag_prefix} Epoch {epoch}: Loss={avg_loss:.4f}, mIoU={epoch_miou:.4f}")
         
         if not is_train and best_vis_payload:
-            self.logger.info(f"Saving Vis for {best_vis_payload[0]}")
+            self.logger.info(f"Saving Vis for {best_vis_payload[0]} (mIoU: {best_vis_miou:.4f})")
             save_vis(self.config['output_dir'], epoch, *best_vis_payload)
             
-        return avg_loss
+        return avg_loss, epoch_miou
 
     def train(self):
         self.logger.info("Starting Training...")
         self.logger.info(f"Validation Seed: {self.config['validation_seed']}")
         for epoch in range(self.config['epochs']):
-            train_loss = self.run_epoch(epoch, is_train=True)
+            train_loss, train_miou = self.run_epoch(epoch, is_train=True)
             
             if self.scheduler: self.scheduler.step()
             
             if epoch % 1 == 0:
-                val_loss = self.run_epoch(epoch, is_train=False)
+                val_loss, val_miou = self.run_epoch(epoch, is_train=False)
                 
-                if val_loss < self.best_val_loss and self.model:
-                    self.best_val_loss = val_loss
+                if val_miou > self.best_val_miou and self.model:
+                    self.best_val_miou = val_miou
                     self.patience_counter = 0
                     torch.save(self.model.state_dict(), os.path.join(self.config['output_dir'], 'best_model.pth'))
-                    self.logger.info(">>> Best Model Saved")
+                    self.logger.info(f">>> Best Model Saved (mIoU: {val_miou:.4f})")
                 else:
                     self.patience_counter += 1
                 
