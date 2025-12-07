@@ -20,7 +20,7 @@ CONFIG = {
     'val_data_root': 'outputs/scannet_cache_val',     # Updated to match your cache path
     'output_dir': 'outputs/ov_sonata',
     'batch_size': 8, 
-    'lr': 1e-4,
+    'lr': 1e-3,  # Increased for training projectors from scratch
     'weight_decay': 1e-4,
     'epochs': 50,
     'patience': 10,
@@ -28,7 +28,7 @@ CONFIG = {
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     # Randomize seed at STARTUP so every run is different, 
     # but the value stays fixed during the loop (ensures consistent validation targets).
-    'validation_seed': random.randint(0, 1000000)
+    'validation_seed': 23456
 }
 
 # --- LOGGING SETUP ---
@@ -95,7 +95,7 @@ def custom_collate_fn(batch):
 
 # --- MODELS ---
 class ProjectionLayer(nn.Module):
-    def __init__(self, in_dim, out_dim, hidden_dim=512):
+    def __init__(self, in_dim, out_dim, hidden_dim=2048):  # Increased capacity for better feature translation
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
@@ -117,12 +117,12 @@ class SparseHierarchicalSearcher(nn.Module):
     def __init__(self, stage_dims):
         super().__init__()
         print(f"Initializing Searcher for dims: {stage_dims}")
-        self.clip_model, _ = clip.load("ViT-B/16", device='cuda')
+        self.clip_model, _ = clip.load("ViT-L/14", device='cuda')  # Upgraded to larger model for better semantics
         self.clip_model.eval()
         for p in self.clip_model.parameters(): p.requires_grad = False
         
         self.projectors = nn.ModuleList([
-            ProjectionLayer(512, dim) for dim in stage_dims
+            ProjectionLayer(768, dim) for dim in stage_dims  # ViT-L/14 has 768-dim embeddings
         ])
         
     def encode_text(self, text):
@@ -140,7 +140,7 @@ class SparseHierarchicalSearcher(nn.Module):
         return torch.mm(stage_feats, text_query.T).squeeze()
 
 class SigmoidFocalLoss(nn.Module):
-    def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
+    def __init__(self, alpha=0.75, gamma=2.0, reduction='mean'):  # Increased alpha to favor objects
         super().__init__()
         self.alpha = alpha
         self.gamma = gamma
@@ -263,6 +263,10 @@ class Trainer:
         best_vis_loss = float('inf')
         best_vis_payload = None
         
+        # Metric Trackers
+        total_intersection = 0
+        total_union = 0
+        
         pbar = tqdm(loader, desc=f"Epoch {epoch} {'Train' if is_train else 'Val'}")
         
         for batch_list in pbar:
@@ -280,8 +284,17 @@ class Trainer:
                 
                 # Move basic dense data to GPU for mask calc
                 # FIX: Convert numpy to tensor if necessary
-                dense_labels = torch.as_tensor(sample['dense_segments']).to(self.device)
-                dense_inverse = torch.as_tensor(sample['dense_inverse']).to(self.device) # Maps Raw -> S0
+                dense_labels = sample['dense_segments']
+                if isinstance(dense_labels, np.ndarray):
+                    dense_labels = torch.from_numpy(dense_labels).to(self.device)
+                else:
+                    dense_labels = dense_labels.to(self.device)
+                    
+                dense_inverse = sample['dense_inverse']
+                if isinstance(dense_inverse, np.ndarray):
+                    dense_inverse = torch.from_numpy(dense_inverse).to(self.device)
+                else:
+                    dense_inverse = dense_inverse.to(self.device)
                 
                 # Init Model if needed
                 stage_embs = sample['stage_embeddings']
@@ -323,13 +336,23 @@ class Trainer:
                     logits = self.model.forward_stage(text_emb, s_feat, s_idx)
                     
                     loss = self.criterion(logits, binary_target)
-                    scene_loss += loss
+                    # Weight coarse stages higher (S0=1, S1=2, ..., S4=5)
+                    stage_weight = s_idx + 1
+                    scene_loss += loss * stage_weight
                     
-                    # Capture S0 for vis
+                    # Capture S0 for vis and metrics
                     if s_idx == 0:
                         vis_logits = logits
                         vis_targets = binary_target
                         vis_coords = sample['stage_coords'][0] # Keep on CPU for vis save
+                        
+                        # --- Compute Intersection & Union for Metrics (Stage 0 Only) ---
+                        with torch.no_grad():
+                            preds = (torch.sigmoid(logits) > 0.5).float()
+                            intersection = (preds * binary_target).sum().item()
+                            union = torch.max(preds, binary_target).sum().item()
+                            total_intersection += intersection
+                            total_union += union
 
                 batch_loss += scene_loss
                 valid_samples += 1
@@ -350,8 +373,17 @@ class Trainer:
                 num_batches += 1
                 pbar.set_postfix({'loss': batch_loss.item()})
 
+        # End of Epoch Metrics
         avg_loss = epoch_loss / max(num_batches, 1)
-        self.writer.add_scalar(f'Loss/{"Train" if is_train else "Val"}', avg_loss, epoch)
+        epoch_miou = total_intersection / (total_union + 1e-6)
+        
+        # Log to TensorBoard
+        tag_prefix = "Train" if is_train else "Val"
+        self.writer.add_scalar(f'Loss/{tag_prefix}', avg_loss, epoch)
+        self.writer.add_scalar(f'mIoU/{tag_prefix}', epoch_miou, epoch)
+        
+        # Log to Console
+        self.logger.info(f"{tag_prefix} Epoch {epoch}: Loss={avg_loss:.4f}, mIoU={epoch_miou:.4f}")
         
         if not is_train and best_vis_payload:
             self.logger.info(f"Saving Vis for {best_vis_payload[0]}")
@@ -364,13 +396,11 @@ class Trainer:
         self.logger.info(f"Validation Seed: {self.config['validation_seed']}")
         for epoch in range(self.config['epochs']):
             train_loss = self.run_epoch(epoch, is_train=True)
-            self.logger.info(f"Epoch {epoch} | Train Loss: {train_loss:.4f}")
             
             if self.scheduler: self.scheduler.step()
             
             if epoch % 1 == 0:
                 val_loss = self.run_epoch(epoch, is_train=False)
-                self.logger.info(f"Epoch {epoch} | Val Loss: {val_loss:.4f}")
                 
                 if val_loss < self.best_val_loss and self.model:
                     self.best_val_loss = val_loss
