@@ -67,15 +67,14 @@ class ScanNetTextDataset(Dataset):
         candidates = [c for c in unique_classes if c not in IGNORED_CLASS_IDS and c != -1]
 
         if len(candidates) > 0:
-            # Pick a random object present in the scene (Positive Sample)
-            # EXPLICITLY CAST TO PYTHON INT to avoid numpy.int64 tensor conversion errors
-            target_cid = int(np.random.choice(candidates))
+           #get all candicates for later use
+            target_cid = [int(c) for c in candidates]
         else:
             # STRICT MODE: Raise error if no valid candidates found.
             raise ValueError(f"Scene {scene_name} has no valid object candidates (candidates={candidates}).")
 
         # Get the text label
-        target_text = CLASS_NAMES[target_cid]
+        target_text = [CLASS_NAMES[c] for c in target_cid]
 
         # 2. Construct Data Dictionary (Geometric Data Only)
         # This dict goes into the transform pipeline. Keys here might be dropped/renamed.
@@ -83,7 +82,7 @@ class ScanNetTextDataset(Dataset):
             "coord": coord,
             "color": color,
             "normal": normal,
-            "segment20": segment, 
+            # "segment20": segment, 
             "instance": instance,
         }
 
@@ -97,7 +96,8 @@ class ScanNetTextDataset(Dataset):
             "name": scene_name,
             "id": idx,             
             "target_cid": target_cid, # For mask generation later
-            "text": target_text       # For CLIP encoding
+            "text": target_text,       # For CLIP encoding
+            "segment20": segment,
         }
 
         return data_dict, meta_dict
