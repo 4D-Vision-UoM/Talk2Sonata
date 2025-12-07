@@ -1,0 +1,126 @@
+Pdb) original_point.keys()
+dict_keys(['coord', 'color', 'normal', 'instance', 'name', 'id', 'segment'])
+(Pdb) point.keys()
+dict_keys(['coord', 'grid_coord', 'color', 'inverse', 'offset', 'feat'])
+
+
+coord
+Float tensor [N, 3]. Downsampled point coordinates (meters), centered by CenterShift and voxelized by GridSample (one point per occupied voxel).
+grid_coord
+Long tensor [N, 3]. Integer voxel indices of the selected points after shifting the grid to start at zero.
+color
+Float tensor [N, 3]. RGB in [0, 1], normalized by NormalizeColor.
+inverse
+Long tensor [M]. For each original point (M = original count), maps it to the voxel group index; used to upsample features from voxelized points back to original points. Indices correspond to positions in coord/grid_coord after sampling.
+offset
+Long tensor [1]. Number of points N (used by batching logic to know segment sizes).
+feat
+Float tensor [N, C]. Concatenated features built by Collect from the requested feat_keys. With the default config: [coord (3) + color (3) + normal (if present, 3)] → typically 6 or 9 channels. If “normal” isn’t available, it’s just coord+color.
+
+
+(Pdb) point['embeddings'][3].shape
+torch.Size([1710, 512])
+(Pdb) point['embeddings'][2].shape
+torch.Size([7194, 384])
+(Pdb) point['embeddings'][1].shape
+torch.Size([27330, 192])
+(Pdb) point['embeddings'][0].shape
+torch.Size([64999, 96])
+
+
+(Pdb) 
+
+(Pdb) len(point['coord'])
+79967
+(Pdb) len(original_point['coord'])
+81369
+(Pdb) len(point['grid_coord'])
+79967
+(Pdb) point['inverse'].shape
+torch.Size([81369])
+
+(Pdb) point['feat'].shape
+torch.Size([79967, 9]) (xyz rgb)
+
+(Pdb) len(point['grid_coord'])
+79967
+(Pdb) point['grid_coord']
+tensor([[415, 128,  92],
+        [415, 128,  94],
+        [415, 128, 100],
+        ...,
+        [ 32, 305,  76],
+        [ 32, 306,  75],
+        [ 32, 306,  90]])
+
+
+
+
+(Pdb) len(point['coord'])
+79967
+(Pdb) point['coord']
+tensor([[ 4.0995, -1.8158,  1.8415],
+        [ 4.0930, -1.8102,  1.8947],
+        [ 4.0829, -1.8085,  2.0121],
+        ...,
+        [-3.5751,  1.7316,  1.5304],
+        [-3.5694,  1.7579,  1.5158],
+        [-3.5614,  1.7484,  1.8007]])
+
+
+(Pdb) original_point['coord']
+array([[-3.6634986 ,  0.14884663,  0.263634  ],
+       [-3.6618783 ,  0.18366241,  0.26288658],
+       [-3.651141  ,  0.11269951,  0.17454773],
+       ...,
+       [ 3.335906  ,  0.5172148 ,  2.5785325 ],
+       [ 3.3295836 ,  0.55105734,  2.611508  ],
+       [ 3.3363953 ,  0.5196438 ,  2.6266727 ]], dtype=float32)
+
+
+
+@TRANSFORMS.register_module()
+class NormalizeColor(object):
+    def __call__(self, data_dict):
+        if "color" in data_dict.keys():
+            data_dict["color"] = data_dict["color"] / 255
+        return data_dict
+
+
+@TRANSFORMS.register_module()
+class NormalizeCoord(object):
+    def __call__(self, data_dict):
+        if "coord" in data_dict.keys():
+            # modified from pointnet2
+            centroid = np.mean(data_dict["coord"], axis=0)
+            data_dict["coord"] -= centroid
+            m = np.max(np.sqrt(np.sum(data_dict["coord"] ** 2, axis=1)))
+            data_dict["coord"] = data_dict["coord"] / m
+        return data_dict
+
+class GridSample(object):
+It voxelizes points: divides coord by grid_size, floors to integer grid cells.
+Shifts cells so the smallest index is zero and remembers the real-space min_coord.
+Groups points by cell using a hash; picks one representative point per occupied cell (train mode).
+Updates coord/color/etc. to only those selected points.
+
+def default():
+    config = [
+        dict(type="CenterShift", apply_z=True),
+        dict(
+            type="GridSample",
+            grid_size=0.02,
+            hash_type="fnv",
+            mode="train",
+            return_grid_coord=True,
+            return_inverse=True,
+        ),
+        dict(type="NormalizeColor"),
+        dict(type="ToTensor"),
+        dict(
+            type="Collect",
+            keys=("coord", "grid_coord", "color", "inverse"),
+            feat_keys=("coord", "color", "normal"),
+        ),
+    ]
+    return Compose(config)
