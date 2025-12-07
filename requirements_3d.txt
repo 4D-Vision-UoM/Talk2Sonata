@@ -1,0 +1,35 @@
+# Talk2Sonata Requirements
+
+# Core dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+numpy==1.24.1
+omegaconf
+
+# CLIP for text encoding
+git+https://github.com/openai/CLIP.git
+
+# Sonata dependencies (3D point cloud processing)
+spconv-cu124  # Adjust CUDA version as needed
+# torch-scatter  # Install separately based on PyTorch version
+huggingface_hub
+timm
+
+# Visualization
+open3d>=0.17.0
+matplotlib
+fast_pytorch_kmeans
+
+# Training utilities
+einops
+transformers
+webdataset
+tqdm
+pyyaml
+requests
+scikit-image
+opencv-python
+psutil
+
+# Optional: for advanced features
+# flash-attn  # Install separately if needed
