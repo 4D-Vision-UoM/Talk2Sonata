@@ -1,13 +1,14 @@
 import os
 import torch
+import numpy as np
 import tqdm
 import sonata
 from sonata.scannet_text import ScanNetTextDataset
 
 # --- CONFIGURATION ---
 CONFIG = {
-    'data_root': 'data/scannet_data/train',  # Change to 'train' as needed
-    'output_dir': 'outputs/scannet_cache_train',     # Change output folder accordingly
+    'data_root': 'data/scannet_data/val',  # Change to 'train' as needed
+    'output_dir': 'outputs/scannet_cache_val',     # Change output folder accordingly
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'sonata_config': dict(
         enc_patch_size=[1024 for _ in range(5)],
@@ -45,40 +46,43 @@ def main():
     for idx in tqdm.tqdm(range(len(dataset))):
         
         # A. Get Data
-        sample = dataset[idx]
-        
-        # Handle skipped scenes (e.g. no valid objects found)
-        if sample is None:
-            # tqdm.write allows printing without breaking the progress bar
-            tqdm.tqdm.write(f"Sample {idx}: Skipped (no valid objects)")
+        try:
+            sample = dataset[idx]
+        except ValueError as e:
+            # Handle scenes with no valid objects
+            tqdm.tqdm.write(f"Sample {idx}: Skipped ({str(e)})")
             continue
         
+        # Dataset returns (point_data, meta_data) tuple
         point_data, meta_data = sample
         
-        # B. Move to GPU
-        # Only move tensors that exist in the point_data dictionary
+        # B. Move to GPU (convert dict to Point object for model)
+        # Point object needs to be created from dict
         for k, v in point_data.items():
             if isinstance(v, torch.Tensor):
                 point_data[k] = v.to(CONFIG['device'], non_blocking=True)
         
         # C. Forward Pass
         with torch.no_grad():
-            # The model modifies point_data in place or returns a dict-like object
+            # The model expects Point-like object and returns dict with stage info
             out = model(point_data)
         
         # D. Prepare Cache Payload
-        # IMPORTANT: Move everything to CPU before saving to avoid CUDA requirement on load
+        # Match the exact structure that training script expects
         cache_data = {
-            "dense_segments": meta_data.pop('segment20'),
+            # Meta information (must include text, target_cid, name for training)
             "meta_data": meta_data,
-            # Sparse Features (List of Tensors)
+            
+            # Stage embeddings and coordinates from Sonata
             "stage_embeddings": [x.detach().cpu() for x in out['stage_embeddings']],
             "stage_coords": [x.detach().cpu() for x in out['stage_coords']],
-            # Dense Data (Useful for mapping back to original points)
-            "dense_coord": point_data['coord'].detach().cpu(),
-            "dense_inverse": point_data['inverse'].detach().cpu(), # Ensure this key matches your dataset return
-            # Save pooling inverses if available (helps mapping sparse->dense)
-            "stage_inverse": [x.detach().cpu() if x is not None else None for x in out.get('stage_pooling_inverses', [])]
+            
+            # Inverse mappings (stage -> dense point mapping)
+            "stage_inverse": [x.detach().cpu() if x is not None else None for x in out.get('stage_pooling_inverses', [])],
+            
+            # Dense-level data (convert numpy to tensor if needed)
+            "dense_segments": torch.from_numpy(meta_data['segment20']) if isinstance(meta_data['segment20'], np.ndarray) else meta_data['segment20'],
+            "dense_inverse": point_data['inverse'].detach().cpu() if 'inverse' in point_data else None,
         }
         
         # E. Save to Disk
