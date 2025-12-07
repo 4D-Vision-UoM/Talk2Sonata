@@ -1,4 +1,4 @@
-from custom.scannet import ScanNetDataset
+from sonata.scannet import ScanNetDataset
 
 train_path = 'data/scannet_data/val'
 dataset = ScanNetDataset(data_root=train_path)
@@ -8,7 +8,7 @@ sample = dataset[0]
 
 
 import open3d as o3d
-import custom as sonata
+import sonata as sonata
 import torch
 
 

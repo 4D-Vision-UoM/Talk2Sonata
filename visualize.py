@@ -11,8 +11,8 @@ import open3d as o3d
 from sklearn.decomposition import PCA
 from sklearn.neighbors import KNeighborsRegressor
 
-from custom.scannet import ScanNetDataset
-import custom as sonata
+from sonata.scannet import ScanNetDataset
+import sonata as sonata
 
 # Configuration
 SEED = 53124

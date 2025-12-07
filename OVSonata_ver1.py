@@ -7,8 +7,8 @@ import open3d as o3d
 import clip  # Using OpenAI CLIP
 from scipy.spatial import cKDTree
 
-from custom.scannet import ScanNetDataset
-import custom as sonata
+from sonata.scannet import ScanNetDataset
+import sonata as sonata
 
 # --- CONFIGURATION ---
 SEED = 42
