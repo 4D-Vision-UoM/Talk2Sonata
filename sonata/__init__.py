@@ -14,6 +14,7 @@
 
 
 from .model import load
+from .scannet import ScanNetDataset
 
 from . import model
 from . import module
@@ -23,4 +24,4 @@ from . import transform
 from . import utils
 from . import registry
 
-__all__ = ["load", "model", "module", "structure", "transform", "registry", "utils"]
+__all__ = ["load", "ScanNetDataset", "model", "module", "structure", "transform", "registry", "utils"]

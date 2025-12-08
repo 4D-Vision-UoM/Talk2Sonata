@@ -5,19 +5,22 @@ and visualizes the stage embeddings as point clouds colored by PCA-reduced featu
 """
 
 import os
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
 import numpy as np
 import torch
 import open3d as o3d
 from sklearn.decomposition import PCA
 
-from sonata.scannet import ScanNetDataset
 import sonata
+from sonata import ScanNetDataset
 
 
 # Configuration
 SEED = 53124
 DATA_PATH = 'data/scannet_data/val'
-OUTPUT_DIR = "demo_outputs/stage_feature_visualizations"
+OUTPUT_DIR = "demo_outputs/stage_feature_pca"
 CUSTOM_CONFIG = dict(
     enc_patch_size=[1024 for _ in range(5)],  # reduce patch size if necessary
     enable_flash=False,
@@ -53,42 +56,6 @@ def compute_pca_colors(features):
             pca_features[:, i] = (pca_features[:, i] - v_min) / (v_max - v_min)
 
     return pca_features
-
-
-import umap
-import numpy as np
-import open3d as o3d
-
-def compute_umap_colors(features, n_neighbors=15, min_dist=0.1):
-    """
-    Reduces features to 3D using UMAP for better cluster separation.
-    """
-    if isinstance(features, torch.Tensor):
-        features = features.detach().cpu().numpy()
-        
-    print("Fitting UMAP... (this may take a moment)")
-    # n_neighbors: controls how local the focus is (low = distinct parts, high = global shape)
-    # min_dist: controls how tightly points are packed
-    reducer = umap.UMAP(
-        n_components=3, 
-        n_neighbors=n_neighbors, 
-        min_dist=min_dist, 
-        random_state=42,
-        n_jobs=1,  # Explicitly set to avoid warning
-        init='random'  # Use random init to avoid spectral failures
-    )
-    embedding = reducer.fit_transform(features)
-    
-    # Normalize to 0-1 for RGB
-    for i in range(3):
-        v_min, v_max = embedding[:, i].min(), embedding[:, i].max()
-        if v_max > v_min:
-            embedding[:, i] = (embedding[:, i] - v_min) / (v_max - v_min)
-        
-    return embedding
-
-# Usage in your loop:
-# 
 
 
 def save_pcd(coords, colors, filename):
@@ -131,12 +98,9 @@ def main():
 
     # Prepare point data
     point = sample.copy()
-    # Handle segment data: use segment20 instead of segment200
     if "segment20" in point:
         segment = point.pop("segment20")
         point["segment"] = segment
-    original_coord = point["coord"].copy()
-    original_point = point.copy()
 
     # Apply transform
     point = transform(point)
@@ -171,9 +135,7 @@ def main():
                 curr_feats = curr_feats[inverse_indices]
 
         pca_rgb = compute_pca_colors(curr_feats)
-        # umap_rgb = compute_umap_colors(curr_feats)
         save_pcd(coord_s0, pca_rgb, f"{OUTPUT_DIR}/stage_{target_stage}_projected_to_dense_pca.pcd")
-        # save_pcd(coord_s0, umap_rgb, f"{OUTPUT_DIR}/stage_{target_stage}_projected_to_dense_umap.pcd")
 
     # Visualize sparse points at each stage
     print("\n--- Saving Sparse Feature Visualizations ---")

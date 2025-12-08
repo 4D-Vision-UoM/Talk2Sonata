@@ -27,7 +27,7 @@ CONFIG = {
     'num_workers': 4,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'clip_model_name': 'ViT-L/14',
-    'use_scannet200': True,  # Set to True to use segment200 instead of segment20
+    'use_scannet200': False,  # Set to True to use segment200 instead of segment20
     # FIX: Randomize seed at startup for different targets across runs
     'validation_seed': 23335,
     # FIX: Weights for Deep Supervision (S0 is most important)
