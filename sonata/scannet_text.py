@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 import sonata  # Assuming your custom sonata package is available
+from sonata.scannet_labels import VALID_CLASS_IDS_200, CLASS_LABELS_200
 
 # --- CONSTANTS ---
 # Standard ScanNet v2 20-class mapping
@@ -16,23 +17,33 @@ CLASS_NAMES = {
     17: "sink", 18: "bathtub", 19: "otherfurniture"
 }
 
-# Classes to exclude from being Ground Truth
-IGNORED_CLASS_IDS = {0, 1, 19}
+# Classes to exclude from being Ground Truth (ScanNet20)
+IGNORED_CLASS_IDS_20 = {0, 1, 19}  # wall, floor, otherfurniture
+
+# Classes to exclude from being Ground Truth (ScanNet200)
+# Based on remapped contiguous IDs: wall=0, floor=2, ceiling=35
+IGNORED_CLASS_IDS_200 = {0, 2, 35}  # wall, floor, ceiling
 
 # Valid candidates for fallback (if a scene is empty of objects)
-VALID_CLASS_IDS = [i for i in CLASS_NAMES.keys() if i not in IGNORED_CLASS_IDS]
+VALID_CLASS_IDS = [i for i in CLASS_NAMES.keys() if i not in IGNORED_CLASS_IDS_20]
+
+# Build ScanNet200 label mapping (NYU40 ID -> Contiguous 0-199)
+ID_TO_LABEL_200 = {nyu_id: i for i, nyu_id in enumerate(VALID_CLASS_IDS_200)}
+LABEL_TO_NAME_200 = {i: name for i, name in enumerate(CLASS_LABELS_200)}
 
 
 class ScanNetTextDataset(Dataset):
-    def __init__(self, data_root, transform=None):
+    def __init__(self, data_root, transform=None, use_scannet200=False):
         """
         Args:
             data_root (str): Path to the folder containing scene folders 
                              (e.g., 'data/scannet_processed/val').
             transform (callable, optional): Sonata transform pipeline.
+            use_scannet200 (bool): If True, use segment200 with 200 classes instead of segment20.
         """
         self.data_root = data_root
         self.transform = transform
+        self.use_scannet200 = use_scannet200
         
         # specific to your directory structure: data_root/sceneXXXX_XX/*.npy
         # We search for all folders inside data_root
@@ -55,26 +66,45 @@ class ScanNetTextDataset(Dataset):
         coord = np.load(os.path.join(scene_path, "coord.npy")).astype(np.float32)
         color = np.load(os.path.join(scene_path, "color.npy")).astype(np.float32)
         normal = np.load(os.path.join(scene_path, "normal.npy")).astype(np.float32)
-        segment = np.load(os.path.join(scene_path, "segment20.npy")).astype(np.int64)
+        segment20 = np.load(os.path.join(scene_path, "segment20.npy")).astype(np.int64)
         instance = np.load(os.path.join(scene_path, "instance.npy")).astype(np.int64)
+        
+        # Load segment200 if available and remap to contiguous 0-199 labels
+        segment200_path = os.path.join(scene_path, "segment200.npy")
+        segment200 = None
+        segment200_remapped = None
+        
+        if os.path.exists(segment200_path):
+            segment200_raw = np.load(segment200_path).astype(np.int64)
+            # Remap from NYU40 IDs to contiguous 0-199
+            segment200_remapped = np.full(segment200_raw.shape, -1, dtype=np.int64)
+            for nyu_id, label_id in ID_TO_LABEL_200.items():
+                mask = (segment200_raw == nyu_id)
+                segment200_remapped[mask] = label_id
+            segment200 = segment200_raw  # Keep original for reference
 
         # --- Dynamic Ground Truth Selection (Text Logic) ---
         
-        # Find all unique classes present in this scene based on the loaded segment
-        unique_classes = np.unique(segment)
-        
-        # Filter out ignored classes (Wall, Floor, Other) and -1 (ignore index)
-        candidates = [c for c in unique_classes if c not in IGNORED_CLASS_IDS and c != -1]
-
-        if len(candidates) > 0:
-           #get all candicates for later use
-            target_cid = [int(c) for c in candidates]
+        if self.use_scannet200 and segment200_remapped is not None:
+            # Use segment200 with remapped labels
+            unique_classes = np.unique(segment200_remapped)
+            candidates = [c for c in unique_classes if c not in IGNORED_CLASS_IDS_200 and c != -1]
+            
+            if len(candidates) > 0:
+                target_cid = [int(c) for c in candidates]
+                target_text = [LABEL_TO_NAME_200[c] for c in target_cid]
+            else:
+                raise ValueError(f"Scene {scene_name} has no valid object candidates in segment200 (candidates={candidates}).")
         else:
-            # STRICT MODE: Raise error if no valid candidates found.
-            raise ValueError(f"Scene {scene_name} has no valid object candidates (candidates={candidates}).")
-
-        # Get the text label
-        target_text = [CLASS_NAMES[c] for c in target_cid]
+            # Use segment20
+            unique_classes = np.unique(segment20)
+            candidates = [c for c in unique_classes if c not in IGNORED_CLASS_IDS_20 and c != -1]
+            
+            if len(candidates) > 0:
+                target_cid = [int(c) for c in candidates]
+                target_text = [CLASS_NAMES[c] for c in target_cid]
+            else:
+                raise ValueError(f"Scene {scene_name} has no valid object candidates in segment20 (candidates={candidates}).")
 
         # 2. Construct Data Dictionary (Geometric Data Only)
         # This dict goes into the transform pipeline. Keys here might be dropped/renamed.
@@ -97,7 +127,8 @@ class ScanNetTextDataset(Dataset):
             "id": idx,             
             "target_cid": target_cid, # For mask generation later
             "text": target_text,       # For CLIP encoding
-            "segment20": segment,
+            "segment20": segment20,
+            "segment200": segment200_remapped,  # Remapped to 0-199 contiguous labels, None if not available
         }
 
         return data_dict, meta_dict

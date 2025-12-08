@@ -7,9 +7,10 @@ from sonata.scannet_text import ScanNetTextDataset
 
 # --- CONFIGURATION ---
 CONFIG = {
-    'data_root': 'data/scannet_data/val',  # Change to 'train' as needed
-    'output_dir': 'outputs/scannet_cache_val',     # Change output folder accordingly
+    'data_root': 'data/scannet_data/train',  # Change to 'train' as needed
+    'output_dir': 'data/scannet_cache_train',     # Change output folder accordingly
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
+    'use_scannet200': False,  # Set to True to cache with segment200 (200 classes)
     'sonata_config': dict(
         enc_patch_size=[1024 for _ in range(5)],
         enable_flash=False,
@@ -30,8 +31,10 @@ def main():
     # 2. Load Dataset
     # We use the dataset directly (no DataLoader) to keep logic simple as requested
     print("Loading Dataset...")
+    seg_mode = "ScanNet200 (200 classes)" if CONFIG['use_scannet200'] else "ScanNet20 (20 classes)"
+    print(f"Segmentation Mode: {seg_mode}")
     transform = sonata.transform.default()
-    dataset = ScanNetTextDataset(data_root=CONFIG['data_root'], transform=transform)
+    dataset = ScanNetTextDataset(data_root=CONFIG['data_root'], transform=transform, use_scannet200=CONFIG['use_scannet200'])
 
     # 3. Load Model
     print("Loading Sonata Backbone...")
@@ -80,8 +83,9 @@ def main():
             # Inverse mappings (stage -> dense point mapping)
             "stage_inverse": [x.detach().cpu() if x is not None else None for x in out.get('stage_pooling_inverses', [])],
             
-            # Dense-level data (convert numpy to tensor if needed)
+            # Dense-level segmentation data (convert numpy to tensor if needed)
             "dense_segments": torch.from_numpy(meta_data['segment20']) if isinstance(meta_data['segment20'], np.ndarray) else meta_data['segment20'],
+            "dense_segments200": torch.from_numpy(meta_data['segment200']) if (meta_data['segment200'] is not None and isinstance(meta_data['segment200'], np.ndarray)) else None,
             "dense_inverse": point_data['inverse'].detach().cpu() if 'inverse' in point_data else None,
         }
         
