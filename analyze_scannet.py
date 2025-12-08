@@ -5,45 +5,52 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from collections import defaultdict
+import sys
+
+# Import ScanNet label mappings
+sys.path.append(os.path.dirname(__file__))
+from sonata.scannet_labels import (
+    VALID_CLASS_IDS_20, CLASS_LABELS_20,
+    VALID_CLASS_IDS_200, CLASS_LABELS_200
+)
 
 # --- CONFIGURATION ---
-DATA_ROOT = 'data/scannet_data/train'  # Adjust if needed
+DATA_ROOT = 'data/scannet_data/val'  # Adjust if needed
 BATCH_SIZE = 4
 NUM_WORKERS = 4
+USE_SCANNET200 = True  # Set to True to analyze segment200 instead of segment20
 
-# Standard ScanNet v2 20-class mapping
-# These map the 'segment20' integers to text descriptions
-CLASS_NAMES = {
-    0: "wall",
-    1: "floor",
-    2: "cabinet",
-    3: "bed",
-    4: "chair",
-    5: "sofa",
-    6: "table",
-    7: "door",
-    8: "window",
-    9: "bookshelf",
-    10: "picture",
-    11: "counter",
-    12: "desk",
-    13: "curtain",
-    14: "refrigerator",
-    15: "shower curtain",
-    16: "toilet",
-    17: "sink",
-    18: "bathtub",
-    19: "otherfurniture"
-}
+# Build label mappings based on configuration
+if USE_SCANNET200:
+    # Map from NYU40 IDs to 0-199 contiguous labels
+    VALID_IDS = VALID_CLASS_IDS_200
+    LABELS = CLASS_LABELS_200
+    SEGMENT_FILE = 'segment200.npy'
+    
+    # Create mapping: NYU40_ID -> Contiguous_ID (0-199)
+    ID_TO_LABEL = {nyu_id: i for i, nyu_id in enumerate(VALID_IDS)}
+    # Inverse mapping: Contiguous_ID -> Name
+    LABEL_TO_NAME = {i: name for i, name in enumerate(LABELS)}
+else:
+    # Map from segment20 to 0-19 contiguous labels
+    VALID_IDS = VALID_CLASS_IDS_20
+    LABELS = CLASS_LABELS_20
+    SEGMENT_FILE = 'segment20.npy'
+    
+    # Create mapping: NYU40_ID -> Contiguous_ID (0-19)
+    ID_TO_LABEL = {nyu_id: i for i, nyu_id in enumerate(VALID_IDS)}
+    # Inverse mapping: Contiguous_ID -> Name
+    LABEL_TO_NAME = {i: name for i, name in enumerate(LABELS)}
 
 # --- DATASET CLASS (Your Code) ---
 class ScanNetDataset(Dataset):
     def __init__(self, data_root, transform=None):
         """
         Args:
-            data_root (str): Path to the folder containing scene folders 
-                             (e.g., 'data/scannet_processed/val').
-            transform (callable, optional): Sonata transform pipeline.
+            data_root (str): Path to the folder containing scene folders.
+            transform (callable, optional): Transform pipeline.
+        
+        Returns segments remapped to contiguous 0-N labels based on USE_SCANNET200 flag.
         """
         self.data_root = data_root
         self.transform = transform
@@ -77,13 +84,19 @@ class ScanNetDataset(Dataset):
                 # Default to black if missing, though unlikely in ScanNet
                 color = np.zeros_like(coord)
 
-            # Load labels if they exist (usually for train/val)
-            segment_path = os.path.join(scene_path, "segment20.npy")
+            # Load labels based on configuration
+            segment_path = os.path.join(scene_path, SEGMENT_FILE)
             
             if os.path.exists(segment_path):
-                segment = np.load(segment_path).astype(np.int64)
+                segment_raw = np.load(segment_path).astype(np.int64)
+                
+                # Remap from NYU40 IDs to contiguous 0-N labels
+                segment = np.full(segment_raw.shape, -1, dtype=np.int64)  # Default to ignore
+                for nyu_id, label_id in ID_TO_LABEL.items():
+                    mask = (segment_raw == nyu_id)
+                    segment[mask] = label_id
             else:
-                segment = np.zeros(coord.shape[0], dtype=np.int64) - 1 # Ignore index
+                segment = np.full(coord.shape[0], -1, dtype=np.int64)  # All ignore
 
         except FileNotFoundError as e:
             # Skip broken scenes gracefully in analysis loop
@@ -91,7 +104,7 @@ class ScanNetDataset(Dataset):
             return None
 
         return {
-            "segment20": segment,
+            "segment": segment,  # Remapped to 0-N contiguous labels
             "color": color,
             "name": scene_name
         }
@@ -105,6 +118,9 @@ def collate_fn(batch):
 
 def main():
     print(f"--- Analyzing ScanNet Labels & Colors in {DATA_ROOT} ---")
+    print(f"Mode: {'ScanNet200 (200 classes)' if USE_SCANNET200 else 'ScanNet20 (20 classes)'}")
+    print(f"Loading from: {SEGMENT_FILE}")
+    print(f"Remapping to contiguous labels: 0-{len(LABEL_TO_NAME)-1}\n")
     
     dataset = ScanNetDataset(DATA_ROOT)
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, 
@@ -124,7 +140,7 @@ def main():
         
         for item in batch:
             total_scenes_processed += 1
-            labels = item['segment20']
+            labels = item['segment']  # Already remapped to 0-N
             colors = item['color']  # (N, 3) - usually 0-255 or 0-1
             
             # Filter out ignore labels (-1) if any
@@ -154,14 +170,14 @@ def main():
 
     # --- PRINT REPORT ---
     print("\n" + "="*85)
-    print(f"{'ID':<4} | {'Name':<16} | {'Scene Freq':<12} | {'Pts (M)':<8} | {'%':<6} | {'Avg RGB (Approx)':<20}")
+    print(f"{'ID':<4} | {'Name':<25} | {'Scene Freq':<12} | {'Pts (M)':<8} | {'%':<6} | {'Avg RGB (Approx)':<20}")
     print("-" * 85)
 
     # Sort by ID for clean output
-    sorted_ids = sorted(CLASS_NAMES.keys())
+    sorted_ids = sorted(LABEL_TO_NAME.keys())
 
     for cls_id in sorted_ids:
-        name = CLASS_NAMES[cls_id]
+        name = LABEL_TO_NAME[cls_id]
         scene_freq = class_scene_counts[cls_id]
         point_count = class_point_counts[cls_id]
         
@@ -179,19 +195,19 @@ def main():
         else:
             color_str = "[N/A]"
 
-        print(f"{cls_id:<4} | {name:<16} | {scene_freq:<4} ({scene_pct:4.1f}%) | {point_count/1e6:<8.2f} | {point_pct:5.2f}% | {color_str:<20}")
+        print(f"{cls_id:<4} | {name:<25} | {scene_freq:<4} ({scene_pct:4.1f}%) | {point_count/1e6:<8.2f} | {point_pct:5.2f}% | {color_str:<20}")
     
     print("="*85)
     print(f"Total Scenes Processed: {total_scenes_processed}")
     print(f"Recommendation: Pick classes with >10% Scene Freq for robust testing.")
-    print("Suggested GT Texts:")
+    print("Suggested GT Texts (Top 5 most frequent):")
     
-    # Suggest texts based on top 5 most frequent objects (excluding wall/floor)
-    valid_objs = [(id, count) for id, count in class_scene_counts.items() if id not in [0, 1]]
+    # Suggest texts based on top 5 most frequent objects
+    valid_objs = [(id, count) for id, count in class_scene_counts.items()]
     valid_objs.sort(key=lambda x: x[1], reverse=True)
     
-    for cls_id, count in valid_objs[:5]:
-        print(f" - 'a {CLASS_NAMES[cls_id]}'")
+    for cls_id, count in valid_objs[:10]:  # Show top 10
+        print(f" - '{LABEL_TO_NAME[cls_id]}' (ID: {cls_id}, appears in {count} scenes)")
 
 if __name__ == "__main__":
     main()
