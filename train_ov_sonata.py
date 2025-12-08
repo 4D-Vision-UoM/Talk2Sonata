@@ -18,17 +18,18 @@ from tqdm import tqdm
 CONFIG = {
     'train_data_root': 'outputs/scannet_cache_train', # Updated to match your cache path
     'val_data_root': 'outputs/scannet_cache_val',     # Updated to match your cache path
-    'output_dir': 'outputs/ov_sonata',
+    'output_dir': 'outputs/ov_sonata_multi_threshold_run2',
     'batch_size': 32, 
     'lr': 1e-3,  # Increased for training projectors from scratch
     'weight_decay': 1e-4,
     'epochs': 100,
-    'patience': 10,
+    'patience': 90,
     'num_workers': 4,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
+    'stage_thresholds': [0.5, 0.45, 0.4, 0.35, 0.3],  # S0 (finest) -> S4 (coarsest): higher threshold for coarser stages
     # Randomize seed at STARTUP so every run is different, 
     # but the value stays fixed during the loop (ensures consistent validation targets).
-    'validation_seed': 23456
+    'validation_seed': 12435
 }
 
 # --- LOGGING SETUP ---
@@ -204,11 +205,11 @@ def get_hierarchical_masks(dense_labels, dense_inverse, stage_inverses, target_c
         
     return active_indices_list
 
-def save_vis(save_dir, epoch, scene_name, text, coords, preds, targets):
+def save_vis(save_dir, epoch, scene_name, text, coords, preds, targets, threshold=0.5):
     vis_dir = os.path.join(save_dir, "visualizations")
     os.makedirs(vis_dir, exist_ok=True)
     coords = coords.detach().cpu().numpy()
-    preds = torch.sigmoid(preds).detach().cpu().numpy() > 0.5
+    preds = torch.sigmoid(preds).detach().cpu().numpy() > threshold
     targets = targets.detach().cpu().numpy() > 0.5
     
     # Pred (Red)
@@ -346,16 +347,19 @@ class Trainer:
                         vis_targets = binary_target
                         vis_coords = sample['stage_coords'][0] # Keep on CPU for vis save
                         
-                    # --- Compute Intersection & Union for Metrics (Stage 0 Only) ---
+                    # --- Compute Intersection & Union for Metrics (Per-Stage) ---
                     with torch.no_grad():
-                        preds = (torch.sigmoid(logits) > 0.5).float()
+                        # Use stage-specific threshold
+                        stage_threshold = self.config['stage_thresholds'][s_idx]
+                        preds = (torch.sigmoid(logits) > stage_threshold).float()
                         intersection = (preds * binary_target).sum().item()
                         union = torch.max(preds, binary_target).sum().item()
                         total_intersection += intersection
                         total_union += union
                         
-                        # Compute scene-level mIoU for visualization tracking
-                        scene_miou = intersection / (union + 1e-6)
+                        # Compute scene-level mIoU for visualization tracking (use S0 only)
+                        if s_idx == 0:
+                            scene_miou = intersection / (union + 1e-6)
 
                 batch_loss += scene_loss
                 valid_samples += 1
@@ -390,7 +394,7 @@ class Trainer:
         
         if not is_train and best_vis_payload:
             self.logger.info(f"Saving Vis for {best_vis_payload[0]} (mIoU: {best_vis_miou:.4f})")
-            save_vis(self.config['output_dir'], epoch, *best_vis_payload)
+            save_vis(self.config['output_dir'], epoch, *best_vis_payload, threshold=self.config['stage_thresholds'][0])
             
         return avg_loss, epoch_miou
 
