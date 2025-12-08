@@ -16,9 +16,9 @@ from tqdm import tqdm
 
 # --- CONFIGURATION ---
 CONFIG = {
-    'train_data_root': 'outputs/scannet_cache_train', 
-    'val_data_root': 'outputs/scannet_cache_val',     
-    'output_dir': 'outputs/ov_sonata_ver2',
+    'train_data_root': 'data/scannet_cache_train', 
+    'val_data_root': 'data/scannet_cache_val',     
+    'output_dir': 'outputs/ov_sonata_seg200',
     'batch_size': 32, 
     'lr': 1e-3,          
     'weight_decay': 1e-4,
@@ -27,8 +27,9 @@ CONFIG = {
     'num_workers': 4,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'clip_model_name': 'ViT-L/14',
+    'use_scannet200': True,  # Set to True to use segment200 instead of segment20
     # FIX: Randomize seed at startup for different targets across runs
-    'validation_seed': 12435,
+    'validation_seed': 23335,
     # FIX: Weights for Deep Supervision (S0 is most important)
     # [Stage 0, Stage 1, Stage 2, Stage 3, Stage 4]
     'stage_loss_weights': [1.0, 0.8, 0.4, 0.2, 0.1] 
@@ -43,11 +44,12 @@ def setup_logging(log_dir):
 
 # --- DATASET ---
 class CachedScanNetDataset(Dataset):
-    def __init__(self, data_root, is_train=True):
+    def __init__(self, data_root, is_train=True, use_scannet200=False):
         self.files = sorted(glob.glob(os.path.join(data_root, "*.pth")))
         self.is_train = is_train
+        self.use_scannet200 = use_scannet200
         if len(self.files) == 0: raise ValueError(f"No .pth files in {data_root}")
-        print(f"Found {len(self.files)} scenes in {data_root} (Train={is_train})")
+        print(f"Found {len(self.files)} scenes in {data_root} (Train={is_train}, ScanNet200={use_scannet200})")
 
     def __len__(self): return len(self.files)
 
@@ -55,7 +57,18 @@ class CachedScanNetDataset(Dataset):
         data = torch.load(self.files[idx], map_location='cpu')
         meta = data.get('meta_data', data)
         
-        texts, cids = meta['text'], meta['target_cid']
+        # Select appropriate targets based on use_scannet200
+        if self.use_scannet200:
+            # Use segment200 targets if available
+            if 'target_cid_segment200' in meta and meta['target_cid_segment200'] is not None:
+                texts, cids = meta['text_segment200'], meta['target_cid_segment200']
+            else:
+                # Fallback to segment20 if segment200 not available
+                texts, cids = meta.get('text_segment20', meta['text']), meta.get('target_cid_segment20', meta['target_cid'])
+        else:
+            # Use segment20 targets
+            texts, cids = meta.get('text_segment20', meta['text']), meta.get('target_cid_segment20', meta['target_cid'])
+            
         if isinstance(cids, int): cids = [cids]
         if isinstance(texts, str): texts = [texts]
 
@@ -226,8 +239,8 @@ class Trainer:
         self.logger = logger
         self.device = config['device']
         
-        self.train_ds = CachedScanNetDataset(config['train_data_root'], True)
-        self.val_ds = CachedScanNetDataset(config['val_data_root'], False)
+        self.train_ds = CachedScanNetDataset(config['train_data_root'], is_train=True, use_scannet200=config['use_scannet200'])
+        self.val_ds = CachedScanNetDataset(config['val_data_root'], is_train=False, use_scannet200=config['use_scannet200'])
         
         self.train_loader = DataLoader(self.train_ds, batch_size=config['batch_size'], collate_fn=custom_collate_fn, shuffle=True, num_workers=config['num_workers'])
         self.val_loader = DataLoader(self.val_ds, batch_size=config['batch_size'], collate_fn=custom_collate_fn, shuffle=False, num_workers=config['num_workers'])
@@ -270,11 +283,19 @@ class Trainer:
             if is_train and self.model: self.optimizer.zero_grad()
             
             for sample in batch:
-                if sample['dense_segments'] is None: continue
+                # Select segment data based on config
+                if self.config['use_scannet200']:
+                    dense_seg_key = 'dense_segments200'
+                    if dense_seg_key not in sample or sample[dense_seg_key] is None:
+                        continue  # Skip if segment200 not available
+                else:
+                    dense_seg_key = 'dense_segments'
+                
+                if sample[dense_seg_key] is None: continue
                 
                 # FIX: Robust conversion of Numpy arrays to Tensor before .to()
                 # Handles both cases if cache is mixed format
-                dense_lbl = torch.as_tensor(sample['dense_segments']).long().to(self.device)
+                dense_lbl = torch.as_tensor(sample[dense_seg_key]).long().to(self.device)
                 dense_inv = torch.as_tensor(sample['dense_inverse']).long().to(self.device)
                 
                 # Init
@@ -345,7 +366,8 @@ class Trainer:
         return avg_loss
 
     def train(self):
-        self.logger.info("Training...")
+        seg_mode = "ScanNet200 (200 classes)" if self.config['use_scannet200'] else "ScanNet20 (20 classes)"
+        self.logger.info(f"Training with {seg_mode}...")
         for epoch in range(self.config['epochs']):
             self.run_epoch(epoch, True)
             if self.scheduler: self.scheduler.step()

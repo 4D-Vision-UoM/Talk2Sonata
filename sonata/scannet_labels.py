@@ -67,6 +67,10 @@ CLASS_LABELS_200 = (
 'laundry detergent', 'bathroom counter', 'object', 'bathroom vanity', 'closet wall', 'laundry hamper', 'bathroom stall door', 'ceiling light', 'trash bin', 'dumbbell', 'stair rail', 'tube', 'bathroom cabinet', 'cd case', 'closet rod',
 'coffee kettle', 'structure', 'shower head', 'keyboard piano', 'case of water bottles', 'coat rack', 'storage organizer', 'folded chair', 'fire alarm', 'power strip', 'calendar', 'poster', 'potted plant', 'luggage', 'mattress')
 
+# Classes to exclude from training (ScanNet200)
+# Based on CLASS_LABELS_200 positions: wall=0, floor=2, ceiling=35
+IGNORED_CLASS_IDS_200 = {0, 2, 35}
+
 # SCANNET_COLOR_MAP_200 = {
 # 0: (0., 0., 0.),
 # 1: (174., 199., 232.),

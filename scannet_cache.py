@@ -7,10 +7,10 @@ from sonata.scannet_text import ScanNetTextDataset
 
 # --- CONFIGURATION ---
 CONFIG = {
-    'data_root': 'data/scannet_data/train',  # Change to 'train' as needed
-    'output_dir': 'data/scannet_cache_train',     # Change output folder accordingly
+    'data_root': 'data/scannet_data/val',  # Change to 'train' as needed
+    'output_dir': 'data/scannet_cache_val',     # Change output folder accordingly
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
-    'use_scannet200': False,  # Set to True to cache with segment200 (200 classes)
+    'use_scannet200': True,  # Set to True to cache with segment200 (200 classes)
     'sonata_config': dict(
         enc_patch_size=[1024 for _ in range(5)],
         enable_flash=False,

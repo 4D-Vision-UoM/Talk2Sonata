@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 import sonata  # Assuming your custom sonata package is available
-from sonata.scannet_labels import VALID_CLASS_IDS_200, CLASS_LABELS_200
+from sonata.scannet_labels import CLASS_LABELS_200, IGNORED_CLASS_IDS_200
 
 # --- CONSTANTS ---
 # Standard ScanNet v2 20-class mapping
@@ -20,16 +20,8 @@ CLASS_NAMES = {
 # Classes to exclude from being Ground Truth (ScanNet20)
 IGNORED_CLASS_IDS_20 = {0, 1, 19}  # wall, floor, otherfurniture
 
-# Classes to exclude from being Ground Truth (ScanNet200)
-# Based on remapped contiguous IDs: wall=0, floor=2, ceiling=35
-IGNORED_CLASS_IDS_200 = {0, 2, 35}  # wall, floor, ceiling
-
 # Valid candidates for fallback (if a scene is empty of objects)
 VALID_CLASS_IDS = [i for i in CLASS_NAMES.keys() if i not in IGNORED_CLASS_IDS_20]
-
-# Build ScanNet200 label mapping (NYU40 ID -> Contiguous 0-199)
-ID_TO_LABEL_200 = {nyu_id: i for i, nyu_id in enumerate(VALID_CLASS_IDS_200)}
-LABEL_TO_NAME_200 = {i: name for i, name in enumerate(CLASS_LABELS_200)}
 
 
 class ScanNetTextDataset(Dataset):
@@ -69,19 +61,13 @@ class ScanNetTextDataset(Dataset):
         segment20 = np.load(os.path.join(scene_path, "segment20.npy")).astype(np.int64)
         instance = np.load(os.path.join(scene_path, "instance.npy")).astype(np.int64)
         
-        # Load segment200 if available and remap to contiguous 0-199 labels
+        # Load segment200 if available (already in 0-199 contiguous format)
         segment200_path = os.path.join(scene_path, "segment200.npy")
         segment200 = None
-        segment200_remapped = None
         
         if os.path.exists(segment200_path):
-            segment200_raw = np.load(segment200_path).astype(np.int64)
-            # Remap from NYU40 IDs to contiguous 0-199
-            segment200_remapped = np.full(segment200_raw.shape, -1, dtype=np.int64)
-            for nyu_id, label_id in ID_TO_LABEL_200.items():
-                mask = (segment200_raw == nyu_id)
-                segment200_remapped[mask] = label_id
-            segment200 = segment200_raw  # Keep original for reference
+            segment200 = np.load(segment200_path).astype(np.int64)
+            # segment200.npy already contains 0-199 contiguous IDs, no remapping needed!
 
         # --- Dynamic Ground Truth Selection (Text Logic) ---
         # Generate targets for BOTH segment20 and segment200 regardless of use_scannet200 flag
@@ -100,13 +86,15 @@ class ScanNetTextDataset(Dataset):
         # Segment200 targets (if available)
         target_cid_200 = []
         target_text_200 = []
-        if segment200_remapped is not None:
-            unique_classes_200 = np.unique(segment200_remapped)
-            candidates_200 = [c for c in unique_classes_200 if c not in IGNORED_CLASS_IDS_200 and c != -1]
+        if segment200 is not None:
+            unique_classes_200 = np.unique(segment200)
+            # segment200 already has 0-199 IDs, use them directly
+            # Exclude: wall(0), floor(2), ceiling(35) based on CLASS_LABELS_200 positions
+            candidates_200 = [c for c in unique_classes_200 if c not in IGNORED_CLASS_IDS_200 and c != -1 and c < len(CLASS_LABELS_200)]
             
             if len(candidates_200) > 0:
                 target_cid_200 = [int(c) for c in candidates_200]
-                target_text_200 = [LABEL_TO_NAME_200[c] for c in target_cid_200]
+                target_text_200 = [CLASS_LABELS_200[c] for c in target_cid_200]
         
         # Choose which to use as primary based on flag
         if self.use_scannet200 and len(target_cid_200) > 0:
@@ -140,7 +128,7 @@ class ScanNetTextDataset(Dataset):
             "target_cid": target_cid,  # Primary target (based on use_scannet200 flag)
             "text": target_text,        # Primary text (based on use_scannet200 flag)
             "segment20": segment20,
-            "segment200": segment200_remapped,  # Remapped to 0-199 contiguous labels, None if not available
+            "segment200": segment200,  # Already 0-199 contiguous labels, None if not available
             # Store both target sets for cache
             "target_cid_segment20": target_cid_20,
             "text_segment20": target_text_20,
