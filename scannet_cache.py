@@ -84,9 +84,20 @@ def main():
             "stage_inverse": [x.detach().cpu() if x is not None else None for x in out.get('stage_pooling_inverses', [])],
             
             # Dense-level segmentation data (convert numpy to tensor if needed)
+            # Always cache both segment20 and segment200 regardless of use_scannet200 flag
             "dense_segments": torch.from_numpy(meta_data['segment20']) if isinstance(meta_data['segment20'], np.ndarray) else meta_data['segment20'],
             "dense_segments200": torch.from_numpy(meta_data['segment200']) if (meta_data['segment200'] is not None and isinstance(meta_data['segment200'], np.ndarray)) else None,
             "dense_inverse": point_data['inverse'].detach().cpu() if 'inverse' in point_data else None,
+            
+            # Store both sets of target info for flexibility during training
+            "meta_data_segment20_targets": {
+                "target_cid": meta_data.get('target_cid_segment20', meta_data['target_cid']),
+                "text": meta_data.get('text_segment20', meta_data['text'])
+            } if 'target_cid_segment20' in meta_data else None,
+            "meta_data_segment200_targets": {
+                "target_cid": meta_data.get('target_cid_segment200'),
+                "text": meta_data.get('text_segment200')
+            } if 'target_cid_segment200' in meta_data else None,
         }
         
         # E. Save to Disk

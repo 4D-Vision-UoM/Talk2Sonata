@@ -84,27 +84,39 @@ class ScanNetTextDataset(Dataset):
             segment200 = segment200_raw  # Keep original for reference
 
         # --- Dynamic Ground Truth Selection (Text Logic) ---
+        # Generate targets for BOTH segment20 and segment200 regardless of use_scannet200 flag
         
-        if self.use_scannet200 and segment200_remapped is not None:
-            # Use segment200 with remapped labels
-            unique_classes = np.unique(segment200_remapped)
-            candidates = [c for c in unique_classes if c not in IGNORED_CLASS_IDS_200 and c != -1]
-            
-            if len(candidates) > 0:
-                target_cid = [int(c) for c in candidates]
-                target_text = [LABEL_TO_NAME_200[c] for c in target_cid]
-            else:
-                raise ValueError(f"Scene {scene_name} has no valid object candidates in segment200 (candidates={candidates}).")
+        # Segment20 targets
+        unique_classes_20 = np.unique(segment20)
+        candidates_20 = [c for c in unique_classes_20 if c not in IGNORED_CLASS_IDS_20 and c != -1]
+        
+        if len(candidates_20) > 0:
+            target_cid_20 = [int(c) for c in candidates_20]
+            target_text_20 = [CLASS_NAMES[c] for c in target_cid_20]
         else:
-            # Use segment20
-            unique_classes = np.unique(segment20)
-            candidates = [c for c in unique_classes if c not in IGNORED_CLASS_IDS_20 and c != -1]
+            target_cid_20 = []
+            target_text_20 = []
+        
+        # Segment200 targets (if available)
+        target_cid_200 = []
+        target_text_200 = []
+        if segment200_remapped is not None:
+            unique_classes_200 = np.unique(segment200_remapped)
+            candidates_200 = [c for c in unique_classes_200 if c not in IGNORED_CLASS_IDS_200 and c != -1]
             
-            if len(candidates) > 0:
-                target_cid = [int(c) for c in candidates]
-                target_text = [CLASS_NAMES[c] for c in target_cid]
-            else:
-                raise ValueError(f"Scene {scene_name} has no valid object candidates in segment20 (candidates={candidates}).")
+            if len(candidates_200) > 0:
+                target_cid_200 = [int(c) for c in candidates_200]
+                target_text_200 = [LABEL_TO_NAME_200[c] for c in target_cid_200]
+        
+        # Choose which to use as primary based on flag
+        if self.use_scannet200 and len(target_cid_200) > 0:
+            target_cid = target_cid_200
+            target_text = target_text_200
+        elif len(target_cid_20) > 0:
+            target_cid = target_cid_20
+            target_text = target_text_20
+        else:
+            raise ValueError(f"Scene {scene_name} has no valid object candidates in any segmentation mode.")
 
         # 2. Construct Data Dictionary (Geometric Data Only)
         # This dict goes into the transform pipeline. Keys here might be dropped/renamed.
@@ -125,10 +137,15 @@ class ScanNetTextDataset(Dataset):
         meta_dict = {
             "name": scene_name,
             "id": idx,             
-            "target_cid": target_cid, # For mask generation later
-            "text": target_text,       # For CLIP encoding
+            "target_cid": target_cid,  # Primary target (based on use_scannet200 flag)
+            "text": target_text,        # Primary text (based on use_scannet200 flag)
             "segment20": segment20,
             "segment200": segment200_remapped,  # Remapped to 0-199 contiguous labels, None if not available
+            # Store both target sets for cache
+            "target_cid_segment20": target_cid_20,
+            "text_segment20": target_text_20,
+            "target_cid_segment200": target_cid_200 if len(target_cid_200) > 0 else None,
+            "text_segment200": target_text_200 if len(target_text_200) > 0 else None,
         }
 
         return data_dict, meta_dict
