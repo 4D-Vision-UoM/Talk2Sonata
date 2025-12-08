@@ -9,6 +9,8 @@ import numpy as np
 import torch
 import open3d as o3d
 from sklearn.decomposition import PCA
+import umap
+import open3d as o3d
 
 from sonata.scannet import ScanNetDataset
 import sonata
@@ -55,9 +57,6 @@ def compute_pca_colors(features):
     return pca_features
 
 
-import umap
-import numpy as np
-import open3d as o3d
 
 def compute_umap_colors(features, n_neighbors=15, min_dist=0.1):
     """
