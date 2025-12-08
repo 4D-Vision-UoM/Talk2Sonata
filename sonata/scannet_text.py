@@ -25,17 +25,15 @@ VALID_CLASS_IDS = [i for i in CLASS_NAMES.keys() if i not in IGNORED_CLASS_IDS_2
 
 
 class ScanNetTextDataset(Dataset):
-    def __init__(self, data_root, transform=None, use_scannet200=False):
+    def __init__(self, data_root, transform=None):
         """
         Args:
             data_root (str): Path to the folder containing scene folders 
                              (e.g., 'data/scannet_processed/val').
             transform (callable, optional): Sonata transform pipeline.
-            use_scannet200 (bool): If True, use segment200 with 200 classes instead of segment20.
         """
         self.data_root = data_root
         self.transform = transform
-        self.use_scannet200 = use_scannet200
         
         # specific to your directory structure: data_root/sceneXXXX_XX/*.npy
         # We search for all folders inside data_root
@@ -95,16 +93,18 @@ class ScanNetTextDataset(Dataset):
             if len(candidates_200) > 0:
                 target_cid_200 = [int(c) for c in candidates_200]
                 target_text_200 = [CLASS_LABELS_200[c] for c in target_cid_200]
-        
-        # Choose which to use as primary based on flag
-        if self.use_scannet200 and len(target_cid_200) > 0:
-            target_cid = target_cid_200
-            target_text = target_text_200
-        elif len(target_cid_20) > 0:
-            target_cid = target_cid_20
-            target_text = target_text_20
         else:
-            raise ValueError(f"Scene {scene_name} has no valid object candidates in any segmentation mode.")
+            raise ValueError(f"Scene {scene_name} is missing segment200.npy file. Both segment20 and segment200 are required.")
+        
+        # Ensure both have valid candidates
+        if len(target_cid_20) == 0:
+            raise ValueError(f"Scene {scene_name} has no valid object candidates in segment20 (all excluded or empty).")
+        if len(target_cid_200) == 0:
+            raise ValueError(f"Scene {scene_name} has no valid object candidates in segment200 (all excluded or empty).")
+        
+        # Use segment20 as primary
+        target_cid = target_cid_20
+        target_text = target_text_20
 
         # 2. Construct Data Dictionary (Geometric Data Only)
         # This dict goes into the transform pipeline. Keys here might be dropped/renamed.

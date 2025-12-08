@@ -59,15 +59,17 @@ class CachedScanNetDataset(Dataset):
         
         # Select appropriate targets based on use_scannet200
         if self.use_scannet200:
-            # Use segment200 targets if available
-            if 'target_cid_segment200' in meta and meta['target_cid_segment200'] is not None:
-                texts, cids = meta['text_segment200'], meta['target_cid_segment200']
-            else:
-                # Fallback to segment20 if segment200 not available
-                texts, cids = meta.get('text_segment20', meta['text']), meta.get('target_cid_segment20', meta['target_cid'])
+            # Use segment200 targets
+            texts = meta.get('text_segment200')
+            cids = meta.get('target_cid_segment200')
+            if texts is None or cids is None:
+                raise ValueError(f"Cache missing segment200 targets. Re-run scannet_cache.py with updated code.")
         else:
             # Use segment20 targets
-            texts, cids = meta.get('text_segment20', meta['text']), meta.get('target_cid_segment20', meta['target_cid'])
+            texts = meta.get('text_segment20')
+            cids = meta.get('target_cid_segment20')
+            if texts is None or cids is None:
+                raise ValueError(f"Cache missing segment20 targets. Re-run scannet_cache.py with updated code.")
             
         if isinstance(cids, int): cids = [cids]
         if isinstance(texts, str): texts = [texts]
@@ -211,16 +213,20 @@ def get_hierarchical_masks(dense_labels, dense_inverse, stage_inverses, target_c
         active_indices_list.append(current_active)
     return active_indices_list
 
-def save_vis(save_dir, epoch, name, text, coords, preds, targets):
-    vis_dir = os.path.join(save_dir, "visualizations")
+def save_vis(save_dir, epoch, name, text, coords, preds, targets, vis_type="best"):
+    vis_dir = os.path.join(save_dir, "visualizations", vis_type)
     os.makedirs(vis_dir, exist_ok=True)
     coords = coords.detach().cpu().numpy()
     preds = torch.sigmoid(preds).detach().cpu().numpy() > 0.5
     targets = targets.detach().cpu().numpy() > 0.5
     
+    # Fix coordinate alignment - swap Y and Z to put floor on XZ plane
+    coords_aligned = coords.copy()
+    coords_aligned[:, [1, 2]] = coords_aligned[:, [2, 1]]  # Swap Y and Z
+    
     # Pred (Red)
     pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(coords)
+    pcd.points = o3d.utility.Vector3dVector(coords_aligned)
     cols = np.ones_like(coords) * 0.7
     cols[preds] = [1.0, 0.0, 0.0]
     pcd.colors = o3d.utility.Vector3dVector(cols)
@@ -274,6 +280,8 @@ class Trainer:
         num_batches = 0
         best_vis_loss = float('inf')
         best_vis = None
+        random_vis = None
+        all_valid_scenes = []  # Collect all valid scenes for random selection
         
         pbar = tqdm(loader, desc=f"Epoch {epoch} {'Train' if is_train else 'Val'}")
         
@@ -333,10 +341,17 @@ class Trainer:
                             total_union += torch.max(preds, target).sum().item()
                             
                             # Vis tracking
-                            if not is_train and loss.item() < best_vis_loss:
-                                best_vis_loss = loss.item()
+                            if not is_train:
                                 name = sample.get('meta_data', {}).get('name', 'unk')
-                                best_vis = (name, sample['selected_text'], sample['stage_coords'][0], logits, target)
+                                vis_data = (name, sample['selected_text'], sample['stage_coords'][0], logits, target)
+                                
+                                # Track best scene (lowest loss)
+                                if loss.item() < best_vis_loss:
+                                    best_vis_loss = loss.item()
+                                    best_vis = vis_data
+                                
+                                # Collect all valid scenes for random selection
+                                all_valid_scenes.append(vis_data)
 
                 batch_loss += scene_loss
                 valid_samples += 1
@@ -360,8 +375,12 @@ class Trainer:
         
         self.logger.info(f"{prefix} E{epoch}: Loss={avg_loss:.4f} mIoU={miou:.4f}")
         
-        if not is_train and best_vis:
-            save_vis(self.config['output_dir'], epoch, *best_vis)
+        if not is_train:
+            if best_vis:
+                save_vis(self.config['output_dir'], epoch, *best_vis, vis_type="best")
+            if all_valid_scenes:
+                random_vis = random.choice(all_valid_scenes)
+                save_vis(self.config['output_dir'], epoch, *random_vis, vis_type="random")
             
         return avg_loss
 
