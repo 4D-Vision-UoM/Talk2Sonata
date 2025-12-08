@@ -748,8 +748,28 @@ class PointTransformerV3(PointModule, PyTorchModelHubMixin):
 
         point.serialization(order=self.order, shuffle_orders=self.shuffle_orders)
         point.sparsify()
+        # Collect encoder stage embeddings (after each enc stage's blocks)
+        stage_embeddings = []
+        stage_coords = []
+        stage_pooling_inverses = []
+        
+        # Iterate named encoder stages to capture features progressively
+        for stage_idx, (name, enc_stage) in enumerate(self.enc._modules.items()):
+            point = enc_stage(point)
+            # store the current resolution features and coords
+            stage_embeddings.append(point.feat.clone())
+            stage_coords.append(point.coord.clone())
+            # store pooling inverse if available (for mapping labels)
+            if "pooling_inverse" in point.keys():
+                stage_pooling_inverses.append(point.pooling_inverse.clone())
+            else:
+                stage_pooling_inverses.append(None)
+        
+        # attach collected data to the point for later access
+        point["stage_embeddings"] = stage_embeddings
+        point["stage_coords"] = stage_coords
+        point["stage_pooling_inverses"] = stage_pooling_inverses
 
-        point = self.enc(point)
         if not self.enc_mode:
             point = self.dec(point)
         return point
