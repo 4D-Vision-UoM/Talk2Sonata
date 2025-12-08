@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Point Cloud Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+            overflow: hidden;
+        }
+
+        #container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        #toolbar {
+            background: #2a2a2a;
+            padding: 15px 20px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            border-bottom: 2px solid #3a3a3a;
+            flex-shrink: 0;
+        }
+
+        #toolbar h1 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-right: auto;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        label {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        select, input[type="file"] {
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid #4a4a4a;
+            background: #3a3a3a;
+            color: #fff;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        select:hover, input[type="file"]:hover {
+            background: #4a4a4a;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 60px;
+            height: 30px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #4a4a4a;
+            transition: .3s;
+            border-radius: 30px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 22px;
+            width: 22px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+        }
+
+        input:checked + .slider {
+            background-color: #2196F3;
+        }
+
+        input:checked + .slider:before {
+            transform: translateX(30px);
+        }
+
+        #viewer-container {
+            display: flex;
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .viewer-panel {
+            position: relative;
+            flex: 1;
+            background: #0a0a0a;
+        }
+
+        .viewer-panel canvas {
+            display: block;
+            width: 100% !important;
+            height: 100% !important;
+        }
+
+        .viewer-label {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            z-index: 10;
+        }
+
+        #file-list {
+            position: fixed;
+            left: 20px;
+            bottom: 20px;
+            background: rgba(42, 42, 42, 0.95);
+            border-radius: 8px;
+            padding: 15px;
+            max-width: 300px;
+            max-height: 400px;
+            overflow-y: auto;
+            z-index: 100;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+
+        #file-list h3 {
+            font-size: 14px;
+            margin-bottom: 10px;
+            color: #aaa;
+        }
+
+        .file-item {
+            padding: 8px 12px;
+            margin: 4px 0;
+            background: #3a3a3a;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.2s;
+        }
+
+        .file-item:hover {
+            background: #4a4a4a;
+        }
+
+        .file-item.active {
+            background: #2196F3;
+        }
+
+        .divider {
+            width: 2px;
+            background: #3a3a3a;
+            cursor: col-resize;
+        }
+
+        .divider:hover {
+            background: #2196F3;
+        }
+
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(42, 42, 42, 0.95);
+            padding: 20px 40px;
+            border-radius: 8px;
+            font-size: 16px;
+            z-index: 1000;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="toolbar">
+            <h1>🎯 Point Cloud Viewer</h1>
+            
+            <div class="control-group">
+                <label for="folder-select">Folder:</label>
+                <select id="folder-select">
+                    <option value="">Select folder...</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label for="split-toggle">Split View:</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="split-toggle">
+                    <span class="slider"></span>
+                </label>
+            </div>
+
+            <div class="control-group">
+                <label for="point-size">Point Size:</label>
+                <input type="range" id="point-size" min="1" max="10" value="2" step="0.5">
+            </div>
+        </div>
+
+        <div id="viewer-container">
+            <div class="viewer-panel" id="viewer-left">
+                <div class="viewer-label" id="label-left">Main View</div>
+            </div>
+            <div class="divider hidden" id="divider"></div>
+            <div class="viewer-panel hidden" id="viewer-right">
+                <div class="viewer-label" id="label-right">Comparison View</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="file-list" class="hidden">
+        <h3>Files</h3>
+        <div id="file-items"></div>
+    </div>
+
+    <div id="loading" class="hidden">Loading...</div>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/examples/js/loaders/PLYLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/examples/js/loaders/PCDLoader.js"></script>
+
+    <script>
+        class PointCloudViewer {
+            constructor() {
+                this.scenes = { left: null, right: null };
+                this.cameras = { left: null, right: null };
+                this.renderers = { left: null, right: null };
+                this.controls = { left: null, right: null };
+                this.pointClouds = { left: null, right: null };
+                this.splitMode = false;
+                this.fileStructure = {};
+                this.currentFolder = null;
+                this.currentFiles = { left: null, right: null };
+                
+                this.init();
+                this.setupEventListeners();
+                this.scanForFiles();
+            }
+
+            init() {
+                this.initViewer('left');
+                this.animate();
+            }
+
+            initViewer(side) {
+                const container = document.getElementById(`viewer-${side}`);
+                
+                // Scene
+                this.scenes[side] = new THREE.Scene();
+                this.scenes[side].background = new THREE.Color(0x0a0a0a);
+
+                // Camera
+                this.cameras[side] = new THREE.PerspectiveCamera(
+                    60,
+                    container.clientWidth / container.clientHeight,
+                    0.01,
+                    1000
+                );
+                this.cameras[side].position.set(3, 3, 3);
+
+                // Renderer
+                this.renderers[side] = new THREE.WebGLRenderer({ antialias: true });
+                this.renderers[side].setSize(container.clientWidth, container.clientHeight);
+                container.appendChild(this.renderers[side].domElement);
+
+                // Controls
+                this.controls[side] = new THREE.OrbitControls(
+                    this.cameras[side],
+                    this.renderers[side].domElement
+                );
+                this.controls[side].enableDamping = true;
+                this.controls[side].dampingFactor = 0.05;
+
+                // Lights
+                const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+                this.scenes[side].add(ambientLight);
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.4);
+                directionalLight.position.set(1, 1, 1);
+                this.scenes[side].add(directionalLight);
+
+                // Grid
+                const gridHelper = new THREE.GridHelper(10, 10, 0x444444, 0x222222);
+                this.scenes[side].add(gridHelper);
+
+                // Handle resize
+                window.addEventListener('resize', () => this.onWindowResize());
+            }
+
+            setupEventListeners() {
+                document.getElementById('split-toggle').addEventListener('change', (e) => {
+                    this.toggleSplitView(e.target.checked);
+                });
+
+                document.getElementById('folder-select').addEventListener('change', (e) => {
+                    this.loadFolder(e.target.value);
+                });
+
+                document.getElementById('point-size').addEventListener('input', (e) => {
+                    this.updatePointSize(parseFloat(e.target.value));
+                });
+
+                // Sync controls when in split mode
+                ['left', 'right'].forEach(side => {
+                    if (this.controls[side]) {
+                        this.controls[side].addEventListener('change', () => {
+                            if (this.splitMode) {
+                                this.syncControls(side);
+                            }
+                        });
+                    }
+                });
+            }
+
+            async scanForFiles() {
+                try {
+                    const response = await fetch('/api/scan-files');
+                    this.fileStructure = await response.json();
+                    this.populateFolderSelect();
+                } catch (error) {
+                    console.error('Error scanning files:', error);
+                    alert('Error loading file list. Make sure to run serve_viewer.py');
+                }
+            }
+
+            populateFolderSelect() {
+                const select = document.getElementById('folder-select');
+                select.innerHTML = '<option value="">Select folder...</option>';
+                
+                Object.keys(this.fileStructure).forEach(folder => {
+                    const option = document.createElement('option');
+                    option.value = folder;
+                    option.textContent = folder;
+                    select.appendChild(option);
+                });
+            }
+
+            loadFolder(folder) {
+                if (!folder) return;
+                
+                this.currentFolder = folder;
+                const files = this.fileStructure[folder] || [];
+                
+                const fileList = document.getElementById('file-list');
+                const fileItems = document.getElementById('file-items');
+                fileItems.innerHTML = '';
+                
+                if (files.length === 0) {
+                    fileList.classList.add('hidden');
+                    return;
+                }
+                
+                fileList.classList.remove('hidden');
+                
+                files.forEach(file => {
+                    const item = document.createElement('div');
+                    item.className = 'file-item';
+                    item.textContent = file;
+                    item.onclick = () => this.loadFile(folder, file, 'left');
+                    fileItems.appendChild(item);
+                });
+            }
+
+            async loadFile(folder, filename, side) {
+                const loading = document.getElementById('loading');
+                loading.classList.remove('hidden');
+
+                try {
+                    const path = `demo_outputs/${folder}/${filename}`;
+                    const extension = filename.split('.').pop().toLowerCase();
+                    
+                    let loader;
+                    if (extension === 'pcd') {
+                        loader = new THREE.PCDLoader();
+                    } else if (extension === 'ply') {
+                        loader = new THREE.PLYLoader();
+                    } else {
+                        throw new Error('Unsupported file format');
+                    }
+
+                    loader.load(path, (geometry) => {
+                        this.displayPointCloud(geometry, side);
+                        this.currentFiles[side] = { folder, filename };
+                        
+                        // Update label
+                        document.getElementById(`label-${side}`).textContent = filename;
+                        
+                        // Try to find pair for split view
+                        if (this.splitMode && side === 'left') {
+                            this.findAndLoadPair(folder, filename);
+                        }
+                        
+                        loading.classList.add('hidden');
+                    });
+                } catch (error) {
+                    console.error('Error loading file:', error);
+                    loading.classList.add('hidden');
+                    alert('Error loading file: ' + error.message);
+                }
+            }
+
+            findAndLoadPair(folder, filename) {
+                const pairs = {
+                    '_gt.pcd': '_pred.pcd',
+                    '_pred.pcd': '_gt.pcd',
+                    '_sparse_pca.pcd': '_projected_to_dense_pca.pcd',
+                    '_projected_to_dense_pca.pcd': '_sparse_pca.pcd'
+                };
+
+                for (let [suffix1, suffix2] of Object.entries(pairs)) {
+                    if (filename.endsWith(suffix1)) {
+                        const pairName = filename.replace(suffix1, suffix2);
+                        const files = this.fileStructure[folder] || [];
+                        if (files.includes(pairName)) {
+                            this.loadFile(folder, pairName, 'right');
+                        }
+                        break;
+                    }
+                }
+            }
+
+            displayPointCloud(geometry, side) {
+                // Remove existing point cloud
+                if (this.pointClouds[side]) {
+                    this.scenes[side].remove(this.pointClouds[side]);
+                }
+
+                const material = new THREE.PointsMaterial({
+                    size: parseFloat(document.getElementById('point-size').value) * 0.01,
+                    vertexColors: geometry.hasAttribute('color')
+                });
+
+                this.pointClouds[side] = new THREE.Points(geometry, material);
+                this.scenes[side].add(this.pointClouds[side]);
+
+                // Center camera on point cloud
+                geometry.computeBoundingBox();
+                const center = new THREE.Vector3();
+                geometry.boundingBox.getCenter(center);
+                
+                this.controls[side].target.copy(center);
+                this.cameras[side].position.set(
+                    center.x + 3,
+                    center.y + 3,
+                    center.z + 3
+                );
+                this.controls[side].update();
+            }
+
+            updatePointSize(size) {
+                ['left', 'right'].forEach(side => {
+                    if (this.pointClouds[side]) {
+                        this.pointClouds[side].material.size = size * 0.01;
+                    }
+                });
+            }
+
+            toggleSplitView(enable) {
+                this.splitMode = enable;
+                const viewerRight = document.getElementById('viewer-right');
+                const divider = document.getElementById('divider');
+
+                if (enable) {
+                    viewerRight.classList.remove('hidden');
+                    divider.classList.remove('hidden');
+                    
+                    if (!this.scenes.right) {
+                        this.initViewer('right');
+                    }
+                    
+                    // Try to load pair
+                    if (this.currentFiles.left) {
+                        this.findAndLoadPair(
+                            this.currentFiles.left.folder,
+                            this.currentFiles.left.filename
+                        );
+                    }
+                } else {
+                    viewerRight.classList.add('hidden');
+                    divider.classList.add('hidden');
+                }
+
+                this.onWindowResize();
+            }
+
+            syncControls(sourceSize) {
+                const target = sourceSize === 'left' ? 'right' : 'left';
+                
+                if (this.controls[target]) {
+                    this.controls[target].target.copy(this.controls[sourceSize].target);
+                    this.cameras[target].position.copy(this.cameras[sourceSize].position);
+                    this.cameras[target].rotation.copy(this.cameras[sourceSize].rotation);
+                    this.controls[target].update();
+                }
+            }
+
+            onWindowResize() {
+                ['left', 'right'].forEach(side => {
+                    if (!this.renderers[side]) return;
+                    
+                    const container = document.getElementById(`viewer-${side}`);
+                    if (container.classList.contains('hidden')) return;
+                    
+                    const width = container.clientWidth;
+                    const height = container.clientHeight;
+                    
+                    this.cameras[side].aspect = width / height;
+                    this.cameras[side].updateProjectionMatrix();
+                    this.renderers[side].setSize(width, height);
+                });
+            }
+
+            animate() {
+                requestAnimationFrame(() => this.animate());
+
+                ['left', 'right'].forEach(side => {
+                    if (this.controls[side]) {
+                        this.controls[side].update();
+                    }
+                    if (this.renderers[side] && this.scenes[side] && this.cameras[side]) {
+                        const container = document.getElementById(`viewer-${side}`);
+                        if (!container.classList.contains('hidden')) {
+                            this.renderers[side].render(this.scenes[side], this.cameras[side]);
+                        }
+                    }
+                });
+            }
+        }
+
+        // Initialize viewer when page loads
+        window.addEventListener('DOMContentLoaded', () => {
+            new PointCloudViewer();
+        });
+    </script>
+</body>
+</html>
